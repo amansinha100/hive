@@ -37,13 +37,13 @@ public class PlanRootSink extends DataSink {
 
   public final PlanNode rootNode_;
 
-  public final HiveProject project_;
+  // public final List<RexNode> projectExprs_;
 
   public final List<FieldSchema> resultSchema_;
 
-  public PlanRootSink(PlanNode rootNode, HiveProject project, List<FieldSchema> resultSchema) {
+  public PlanRootSink(PlanNode rootNode, List<FieldSchema> resultSchema) {
     rootNode_ = rootNode;
-    project_ = project;
+    // projectExprs_ = projectExprs;
     resultSchema_ = resultSchema;
   }
 
@@ -58,15 +58,15 @@ public class PlanRootSink extends DataSink {
     //XXX: fill this in
     dataSink.setLabel("");
 
-    for (RexNode field : project_.getProjects()) {
-      TExpr expr = new TExpr();
-      Column c = ExprFactory.createExpr(field);
-      //XXX: assuming one tuple right now
-      assert rootNode_.getTupleDescriptors().size() == 0;
-      expr.setNodes(c.getTExprNodeList(rootNode_.getTupleDescriptors().get(0)));
-      dataSink.addToOutput_exprs(expr);
-
-      System.out.println("SJC: PRINTING PROJECT IN ROOT: " + field);
+    if (rootNode_.getOutputExprs() != null) {
+      for (RexNode field : rootNode_.getOutputExprs()) {
+        TExpr expr = new TExpr();
+        Column c = ExprFactory.createExpr(field);
+        //XXX: assuming one tuple right now
+        assert rootNode_.getTupleDescriptors().size() == 0;
+        expr.setNodes(c.getTExprNodeList(rootNode_.getTupleDescriptors().get(0)));
+        dataSink.addToOutput_exprs(expr);
+      }
     }
 
     // XXX hardcoded

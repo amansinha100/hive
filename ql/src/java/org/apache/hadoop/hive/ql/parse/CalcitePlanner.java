@@ -175,6 +175,7 @@ import org.apache.hadoop.hive.ql.optimizer.calcite.rules.HiveFilterProjectTransp
 import org.apache.hadoop.hive.ql.optimizer.calcite.rules.HiveFilterSetOpTransposeRule;
 import org.apache.hadoop.hive.ql.optimizer.calcite.rules.HiveFilterSortPredicates;
 import org.apache.hadoop.hive.ql.optimizer.calcite.rules.HiveFilterSortTransposeRule;
+import org.apache.hadoop.hive.ql.optimizer.calcite.rules.HiveImpalaRules;
 import org.apache.hadoop.hive.ql.optimizer.calcite.rules.HiveInsertExchange4JoinRule;
 import org.apache.hadoop.hive.ql.optimizer.calcite.rules.HiveIntersectMergeRule;
 import org.apache.hadoop.hive.ql.optimizer.calcite.rules.HiveIntersectRewriteRule;
@@ -227,7 +228,6 @@ import org.apache.hadoop.hive.ql.optimizer.calcite.rules.views.HiveNoAggregateIn
 import org.apache.hadoop.hive.ql.optimizer.calcite.rules.views.MaterializedViewRewritingRelVisitor;
 import org.apache.hadoop.hive.ql.optimizer.calcite.translator.ASTBuilder;
 import org.apache.hadoop.hive.ql.optimizer.calcite.translator.ASTConverter;
-import org.apache.hadoop.hive.ql.optimizer.calcite.translator.HiveImpalaConverter;
 import org.apache.hadoop.hive.ql.optimizer.calcite.translator.HiveOpConverter;
 import org.apache.hadoop.hive.ql.optimizer.calcite.translator.JoinCondTypeCheckProcFactory;
 import org.apache.hadoop.hive.ql.optimizer.calcite.translator.JoinTypeCheckCtx;
@@ -252,8 +252,10 @@ import org.apache.hadoop.hive.ql.plan.ExprNodeDescUtils;
 import org.apache.hadoop.hive.ql.plan.GroupByDesc;
 import org.apache.hadoop.hive.ql.plan.HiveOperation;
 import org.apache.hadoop.hive.ql.plan.SelectDesc;
-import org.apache.hadoop.hive.ql.plan.impala.DataSink;
-import org.apache.hadoop.hive.ql.plan.impala.ScanNode;
+import org.apache.hadoop.hive.ql.plan.impala.IdGenType;
+import org.apache.hadoop.hive.ql.plan.impala.IdGenerator;
+import org.apache.hadoop.hive.ql.plan.impala.ImpalaContext;
+import org.apache.hadoop.hive.ql.plan.impala.PlanUtils;
 import org.apache.hadoop.hive.ql.plan.mapper.EmptyStatsSource;
 import org.apache.hadoop.hive.ql.plan.mapper.StatsSource;
 import org.apache.hadoop.hive.ql.session.SessionState;
@@ -273,7 +275,6 @@ import org.apache.hadoop.hive.serde2.typeinfo.StructTypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoFactory;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoUtils;
-import org.apache.impala.thrift.TExplainLevel;
 import org.joda.time.Interval;
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -431,8 +432,7 @@ public class CalcitePlanner extends SemanticAnalyzer {
   Operator genOPTree(ASTNode ast, PlannerContext plannerCtx) throws SemanticException {
     Operator sinkOp = null;
     boolean skipCalcitePlan = false;
-    System.out.println("SJC: IN GENOPTREE");
-    boolean runImpala = HiveConf.getVar(conf, HiveConf.ConfVars.HIVE_EXECUTION_ENGINE).equals("impala");
+
     if (!runCBO) {
       skipCalcitePlan = true;
     } else {
@@ -457,7 +457,6 @@ public class CalcitePlanner extends SemanticAnalyzer {
         handleMultiDestQuery(ast, cboCtx);
       }
 
-      System.out.println("SJC: IN HERE");
       if (runCBO) {
         profilesCBO = obtainCBOProfiles(queryProperties);
 
@@ -468,32 +467,6 @@ public class CalcitePlanner extends SemanticAnalyzer {
         try {
           // 0. Gen Optimized Plan
           RelNode newPlan = logicalPlan();
-
-          if (runImpala) {
-            try {
-              HiveImpalaConverter sjcSpecial = new HiveImpalaConverter(newPlan, resultSchema);
-              System.out.println("SJC: ROOT PLAN NODE THRIFT IS " + sjcSpecial.getRootPlanNode().treeToThrift());
-              System.out.println("SJC: DESCRIPTOR TABLE THRIFT IS " + sjcSpecial.getDescriptorTable().toThrift());
-              for (ScanNode scanNode : sjcSpecial.getScanRangeLocations().getScanNodes()) {
-                System.out.println("SJC: SCAN NODE SPEC IS " + sjcSpecial.getScanRangeLocations().getScanRangeSpec(scanNode));
-              }
-              DataSink planRootSink = sjcSpecial.getDataSink();
-              System.out.println("SJC: PLAN ROOT DATA SINK IS " + planRootSink.getTDataSink());
-              System.out.println("SJC: TRESULTSETMETADATA IS " + planRootSink.getTResultSetMetadata());
-              System.out.println("SJC: EXPLAIN ROOT NODE\n" + sjcSpecial.getRootPlanNode().getExplainString("", "", TExplainLevel.VERBOSE));
-              System.out.println("SJC: EXPLAIN PLAN ROOT SINK\n" + planRootSink.getExplainString("", "|  ", TExplainLevel.VERBOSE));
-
-              System.out.println("SJC: FINAL PLAN!!!!!!!");
-              System.out.println("SJC: PLAN ROOT DATA SINK IS " + sjcSpecial.getExecRequest(queryState.getQueryString()));
-              System.out.println("SJC: FINAL EXPLAIN PLAN!!!!!!!");
-              System.out.println("SJC: EXPLAIN PLAN ROOT SINK\n" + sjcSpecial.getPlanExecInfo().getExplainString(TExplainLevel.VERBOSE));
-              this.ctx.setExecRequest(sjcSpecial.getExecRequest(queryState.getQueryString()));
-              this.ctx.setImpalaConverter(sjcSpecial);
-            } catch (Exception e) {
-              System.out.println("SJC: IMPALA CONVERSION DID NOT RUN");
-              e.printStackTrace();
-            }
-          }
 
           if (this.conf.getBoolVar(HiveConf.ConfVars.HIVE_CBO_RETPATH_HIVEOP)) {
             if (cboCtx.type == PreCboCtx.Type.VIEW && !materializedView) {
@@ -2342,24 +2315,67 @@ public class CalcitePlanner extends SemanticAnalyzer {
             new HiveFilterSortPredicates(noColsMissingStats));
       }
 
-      // 7. Apply Druid transformation rules
-      generatePartialProgram(program, false, HepMatchOrder.DEPTH_FIRST,
-          HiveDruidRules.FILTER_DATE_RANGE_RULE,
-          HiveDruidRules.FILTER, HiveDruidRules.PROJECT_FILTER_TRANSPOSE,
-          HiveDruidRules.AGGREGATE_FILTER_TRANSPOSE,
-          HiveDruidRules.AGGREGATE_PROJECT,
-          HiveDruidRules.PROJECT,
-          HiveDruidRules.EXPAND_SINGLE_DISTINCT_AGGREGATES_DRUID_RULE,
-          HiveDruidRules.AGGREGATE,
-          HiveDruidRules.POST_AGGREGATION_PROJECT,
-          HiveDruidRules.FILTER_AGGREGATE_TRANSPOSE,
-          HiveDruidRules.FILTER_PROJECT_TRANSPOSE,
-          HiveDruidRules.HAVING_FILTER_RULE,
-          HiveDruidRules.SORT_PROJECT_TRANSPOSE,
-          HiveDruidRules.SORT,
-          HiveDruidRules.PROJECT_SORT_TRANSPOSE);
+      // 6.1 Apply Impala transformation rules if impala execution is enabled
+      boolean runImpala = HiveConf.getVar(conf, HiveConf.ConfVars.HIVE_EXECUTION_ENGINE).
+          equalsIgnoreCase("impala");
+      if (runImpala) {
+        ImpalaContext impalaContext = new ImpalaContext();
+        ctx.setImpalaContext(impalaContext);
+        applyImpalaRules(program);
+      } else {
+        // 7. Apply Druid transformation rules
+        applyDruidRules(program);
 
-      // 8. Apply JDBC transformation rules
+        // 8. Apply JDBC transformation rules
+        applyJDBCRules(program);
+
+        // 9. Run rules to aid in translation from Calcite tree to Hive tree
+        applyAdditionalHiveRules(program);
+      }
+
+      // Trigger program
+      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.OPTIMIZER);
+      basePlan = executeProgram(basePlan, program.build(), mdProvider, executorProvider);
+      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.OPTIMIZER,
+          "Calcite: Postjoin ordering transformation");
+
+      if (runImpala) {
+        // If Impala execution is enabled, create an Impala context and save the root of
+        // the plan for Impala to do further post-processing
+        ctx.getImpalaContext().init(basePlan, resultSchema, queryState.getQueryString());
+      }
+      return basePlan;
+    }
+
+    private void applyImpalaRules(HepProgramBuilder program) {
+      List<RelOptRule> impalaRules = Lists.newArrayList();
+      impalaRules.add(new HiveImpalaRules.ImpalaProjectFilterScanRule(HiveRelFactories.HIVE_BUILDER,
+              ctx.getImpalaContext().getIdGenerators()));
+      impalaRules.add(new HiveImpalaRules.ImpalaProjectScanRule(HiveRelFactories.HIVE_BUILDER,
+              ctx.getImpalaContext().getIdGenerators()));
+      generatePartialProgram(program, false, HepMatchOrder.DEPTH_FIRST,
+              impalaRules.toArray(new RelOptRule[impalaRules.size()]));
+    }
+
+    private void applyDruidRules(HepProgramBuilder program) {
+      generatePartialProgram(program, false, HepMatchOrder.DEPTH_FIRST,
+              HiveDruidRules.FILTER_DATE_RANGE_RULE,
+              HiveDruidRules.FILTER, HiveDruidRules.PROJECT_FILTER_TRANSPOSE,
+              HiveDruidRules.AGGREGATE_FILTER_TRANSPOSE,
+              HiveDruidRules.AGGREGATE_PROJECT,
+              HiveDruidRules.PROJECT,
+              HiveDruidRules.EXPAND_SINGLE_DISTINCT_AGGREGATES_DRUID_RULE,
+              HiveDruidRules.AGGREGATE,
+              HiveDruidRules.POST_AGGREGATION_PROJECT,
+              HiveDruidRules.FILTER_AGGREGATE_TRANSPOSE,
+              HiveDruidRules.FILTER_PROJECT_TRANSPOSE,
+              HiveDruidRules.HAVING_FILTER_RULE,
+              HiveDruidRules.SORT_PROJECT_TRANSPOSE,
+              HiveDruidRules.SORT,
+              HiveDruidRules.PROJECT_SORT_TRANSPOSE);
+    }
+
+    private void applyJDBCRules(HepProgramBuilder program) {
       if (conf.getBoolVar(ConfVars.HIVE_ENABLE_JDBC_PUSHDOWN)) {
         List<RelOptRule> rules = Lists.newArrayList();
         rules.add(JDBCExpandExpressionsRule.FILTER_INSTANCE);
@@ -2378,39 +2394,32 @@ public class CalcitePlanner extends SemanticAnalyzer {
           rules.add(JDBCSortPushDownRule.INSTANCE);
         }
         generatePartialProgram(program, true, HepMatchOrder.TOP_DOWN,
-            rules.toArray(new RelOptRule[rules.size()]));
+                rules.toArray(new RelOptRule[rules.size()]));
       }
+    }
 
-      // 9. Run rules to aid in translation from Calcite tree to Hive tree
+    private void applyAdditionalHiveRules(HepProgramBuilder program) {
       if (HiveConf.getBoolVar(conf, ConfVars.HIVE_CBO_RETPATH_HIVEOP)) {
         // 9.1. Merge join into multijoin operators (if possible)
         generatePartialProgram(program, true, HepMatchOrder.BOTTOM_UP,
-            HiveJoinProjectTransposeRule.BOTH_PROJECT_INCLUDE_OUTER,
-            HiveJoinProjectTransposeRule.LEFT_PROJECT_INCLUDE_OUTER,
-            HiveJoinProjectTransposeRule.RIGHT_PROJECT_INCLUDE_OUTER,
-            HiveJoinToMultiJoinRule.INSTANCE, HiveProjectMergeRule.INSTANCE);
+                HiveJoinProjectTransposeRule.BOTH_PROJECT_INCLUDE_OUTER,
+                HiveJoinProjectTransposeRule.LEFT_PROJECT_INCLUDE_OUTER,
+                HiveJoinProjectTransposeRule.RIGHT_PROJECT_INCLUDE_OUTER,
+                HiveJoinToMultiJoinRule.INSTANCE, HiveProjectMergeRule.INSTANCE);
         // The previous rules can pull up projections through join operators,
         // thus we run the field trimmer again to push them back down
         generatePartialProgram(program, false, HepMatchOrder.TOP_DOWN,
-            new HiveFieldTrimmerRule(false));
+                new HiveFieldTrimmerRule(false));
         generatePartialProgram(program, false, HepMatchOrder.DEPTH_FIRST,
-            ProjectRemoveRule.INSTANCE, new ProjectMergeRule(false, HiveRelFactories.HIVE_BUILDER));
+                ProjectRemoveRule.INSTANCE, new ProjectMergeRule(false, HiveRelFactories.HIVE_BUILDER));
         generatePartialProgram(program, true, HepMatchOrder.TOP_DOWN,
-            HiveFilterProjectTSTransposeRule.INSTANCE, HiveFilterProjectTSTransposeRule.INSTANCE_DRUID,
-            HiveProjectFilterPullUpConstantsRule.INSTANCE);
+                HiveFilterProjectTSTransposeRule.INSTANCE, HiveFilterProjectTSTransposeRule.INSTANCE_DRUID,
+                HiveProjectFilterPullUpConstantsRule.INSTANCE);
 
         // 9.2.  Introduce exchange operators below join/multijoin operators
         generatePartialProgram(program, false, HepMatchOrder.DEPTH_FIRST,
-            HiveInsertExchange4JoinRule.EXCHANGE_BELOW_JOIN, HiveInsertExchange4JoinRule.EXCHANGE_BELOW_MULTIJOIN);
+                HiveInsertExchange4JoinRule.EXCHANGE_BELOW_JOIN, HiveInsertExchange4JoinRule.EXCHANGE_BELOW_MULTIJOIN);
       }
-
-      // Trigger program
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.OPTIMIZER);
-      basePlan = executeProgram(basePlan, program.build(), mdProvider, executorProvider);
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.OPTIMIZER,
-          "Calcite: Postjoin ordering transformation");
-
-      return basePlan;
     }
 
     private List<String> getTablesUsed(RelNode plan) {

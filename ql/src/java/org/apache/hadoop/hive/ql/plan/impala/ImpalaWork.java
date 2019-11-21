@@ -20,7 +20,6 @@ package org.apache.hadoop.hive.ql.plan.impala;
 import java.io.Serializable;
 
 import org.apache.hadoop.hive.ql.exec.FetchTask;
-import org.apache.hadoop.hive.ql.optimizer.calcite.translator.HiveImpalaConverter;
 import org.apache.hadoop.hive.ql.plan.Explain;
 import org.apache.hadoop.hive.ql.plan.Explain.Level;
 import org.apache.impala.thrift.TExecRequest;
@@ -31,17 +30,17 @@ public class ImpalaWork implements Serializable {
     private final String query;
     private final TExecRequest execRequest;
     private final FetchTask fetch;
-    private final HiveImpalaConverter impalaConverter;
+    private final ImpalaContext impalaContext;
 
-    public ImpalaWork(TExecRequest execRequest, String query, FetchTask fetch, HiveImpalaConverter impalaConverter) {
+    public ImpalaWork(TExecRequest execRequest, String query, FetchTask fetch, ImpalaContext impalaContext) {
         this.execRequest = execRequest;
         this.query = query;
         this.fetch = fetch;
-        this.impalaConverter = impalaConverter;
+        this.impalaContext = impalaContext;
     }
 
     @Explain(displayName = "Impala Plan")
-    public String getImpalaExplain() { return "\n" + impalaConverter.getPlanExecInfo().getExplainString(org.apache.impala.thrift.TExplainLevel.VERBOSE); }
+    public String getImpalaExplain() { return "\n" + impalaContext.getPlanExecInfo().getExplainString(org.apache.impala.thrift.TExplainLevel.VERBOSE); }
     public TExecRequest getExecRequest() { return execRequest; }
     public String getQuery() {
         return query;

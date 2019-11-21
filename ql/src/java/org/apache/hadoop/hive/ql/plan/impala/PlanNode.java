@@ -24,8 +24,8 @@ import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.AbstractRelNode;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rex.RexNode;
 import org.apache.hadoop.hive.ql.optimizer.calcite.reloperators.HiveFilter;
-import org.apache.impala.thrift.TColumn;
 import org.apache.impala.thrift.TExecNodePhase;
 import org.apache.impala.thrift.TExecStats;
 import org.apache.impala.thrift.TExplainLevel;
@@ -70,6 +70,9 @@ public abstract class PlanNode extends AbstractRelNode {
   //XXX:
   private final int avgRowSize_ = 0;
 
+  private List<RexNode>  outputExprs;
+
+
   public PlanNode(RelOptCluster cluster, RelTraitSet traitSet, List<TupleDescriptor> tuples, HiveFilter filter, PlanId planId, String displayName) {
     super(cluster, traitSet);
     id_ = planId;
@@ -80,6 +83,14 @@ public abstract class PlanNode extends AbstractRelNode {
     pipelines_ = new ImmutableList.Builder<PipelineMembership>().add(
         new PipelineMembership(id_, 0, TExecNodePhase.GETNEXT)).build();
     filter_ = filter;
+  }
+
+  public void setOutputExprs(List<RexNode> outputExprs) {
+    this.outputExprs = outputExprs;
+  }
+
+  public List<RexNode> getOutputExprs() {
+    return outputExprs;
   }
 
   // Convert this plan node, including all children, to its Thrift representation.

@@ -52,13 +52,13 @@ import org.apache.hadoop.hive.ql.lockmgr.HiveLockObj;
 import org.apache.hadoop.hive.ql.lockmgr.HiveTxnManager;
 import org.apache.hadoop.hive.ql.lockmgr.LockException;
 import org.apache.hadoop.hive.ql.metadata.Table;
-import org.apache.hadoop.hive.ql.optimizer.calcite.translator.HiveImpalaConverter;
 import org.apache.hadoop.hive.ql.parse.ASTNode;
 import org.apache.hadoop.hive.ql.parse.ExplainConfiguration;
 import org.apache.hadoop.hive.ql.parse.ExplainConfiguration.AnalyzeState;
 import org.apache.hadoop.hive.ql.parse.HiveParser;
 import org.apache.hadoop.hive.ql.parse.QB;
 import org.apache.hadoop.hive.ql.plan.LoadTableDesc;
+import org.apache.hadoop.hive.ql.plan.impala.ImpalaContext;
 import org.apache.hadoop.hive.ql.plan.mapper.EmptyStatsSource;
 import org.apache.hadoop.hive.ql.plan.mapper.PlanMapper;
 import org.apache.hadoop.hive.ql.plan.mapper.StatsSource;
@@ -68,8 +68,6 @@ import org.apache.hadoop.hive.shims.ShimLoader;
 import org.apache.hadoop.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.apache.impala.thrift.TExecRequest;
-
 
 /**
  * Context for Semantic Analyzers. Usage: not reusable - construct a new one for
@@ -173,23 +171,15 @@ public class Context {
   // Load data rewrite
   private Table tempTableForLoad;
 
-  private TExecRequest execRequest;
-  private HiveImpalaConverter impalaConverter;
+  // Impala planning context which is non-null only for Impala planning
+  private ImpalaContext impalaContext;
 
-  public void setExecRequest(TExecRequest execRequest) {
-    this.execRequest = execRequest;
+  public void setImpalaContext(ImpalaContext impalaContext) {
+    this.impalaContext = impalaContext;
   }
 
-  public TExecRequest getExecRequest() {
-    return execRequest;
-  }
-
-  public HiveImpalaConverter getImpalaConverter() {
-    return impalaConverter;
-  }
-
-  public void setImpalaConverter(HiveImpalaConverter impalaConverter) {
-    this.impalaConverter = impalaConverter;
+  public ImpalaContext getImpalaContext() {
+    return impalaContext;
   }
 
   public void setOperation(Operation operation) {
@@ -391,6 +381,7 @@ public class Context {
     this.viewsTokenRewriteStreams = new HashMap<>();
     this.rewrittenStatementContexts = new HashSet<>();
     this.opContext = new CompilationOpContext();
+    this.impalaContext = ctx.impalaContext;
   }
 
   public Map<String, Path> getFsScratchDirs() {

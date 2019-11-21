@@ -26,7 +26,6 @@
 package org.apache.hadoop.hive.ql.plan.impala;
 
 import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.hive.ql.optimizer.calcite.translator.HiveImpalaConverter;
 import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.impala.thrift.TClientRequest;
 import org.apache.impala.thrift.TExecRequest;
@@ -37,7 +36,6 @@ import org.apache.impala.thrift.TKuduReadMode;
 import org.apache.impala.thrift.TParquetFallbackSchemaResolution;
 import org.apache.impala.thrift.TParquetArrayResolution;
 import org.apache.impala.thrift.TParquetTimestampType;
-import org.apache.impala.thrift.TPlanExecInfo;
 import org.apache.impala.thrift.TPrefetchMode;
 import org.apache.impala.thrift.TReplicaPreference;
 import org.apache.impala.thrift.TRuntimeFilterMode;
@@ -56,13 +54,13 @@ import com.google.common.collect.ImmutableList;
 import java.util.ArrayList;
 
     public class ExecRequest {
-  public static TExecRequest getExecRequest(HiveImpalaConverter converter, String queryString) {
+  public static TExecRequest getExecRequest(ImpalaContext context, String queryString) {
     TExecRequest execRequest = new TExecRequest();
     execRequest.setStmt_type(TStmtType.QUERY);
     execRequest.setQuery_options(getQueryOptions());
     //XXX: not putting in access events yet
-    execRequest.setResult_set_metadata(converter.getDataSink().getTResultSetMetadata());
-    execRequest.setQuery_exec_request(getQueryExecRequest(converter, queryString));
+    execRequest.setResult_set_metadata(context.getDataSink().getTResultSetMetadata());
+    execRequest.setQuery_exec_request(getQueryExecRequest(context, queryString));
     execRequest.setUser_has_profile_access(true);
     execRequest.setAnalysis_warnings(new ArrayList<>());
     return execRequest;
@@ -158,14 +156,14 @@ import java.util.ArrayList;
     return queryOptions;
   }
   
-  public static TQueryExecRequest getQueryExecRequest(HiveImpalaConverter converter, String queryString) {
+  public static TQueryExecRequest getQueryExecRequest(ImpalaContext context, String queryString) {
     TQueryExecRequest queryExecRequest = new TQueryExecRequest();
-    queryExecRequest.setPlan_exec_info(ImmutableList.of(converter.getPlanExecInfo().toThrift()));
-    queryExecRequest.setQuery_ctx(getQueryCtx(converter, queryString));
+    queryExecRequest.setPlan_exec_info(ImmutableList.of(context.getPlanExecInfo().toThrift()));
+    queryExecRequest.setQuery_ctx(getQueryCtx(context, queryString));
     //XXX: query_id
-    queryExecRequest.setQuery_plan(converter.getPlanExecInfo().getExplainString(TExplainLevel.VERBOSE));
+    queryExecRequest.setQuery_plan(context.getPlanExecInfo().getExplainString(TExplainLevel.VERBOSE));
     queryExecRequest.setStmt_type(TStmtType.QUERY);
-    queryExecRequest.setHost_list(converter.getScanRangeLocations().getHostIndexes());
+    queryExecRequest.setHost_list(context.getScanRangeLocations().getHostIndexes());
     queryExecRequest.setPer_host_mem_estimate(33554432);
     queryExecRequest.setMax_per_host_min_mem_reservation(8192);
     queryExecRequest.setMax_per_host_thread_reservation(2);
@@ -173,7 +171,7 @@ import java.util.ArrayList;
     return queryExecRequest;
   }
 
-  public static TQueryCtx getQueryCtx(HiveImpalaConverter converter, String queryString) {
+  public static TQueryCtx getQueryCtx(ImpalaContext context, String queryString) {
     TQueryCtx queryCtx = new TQueryCtx();
     queryCtx.setClient_request(getClientRequest(queryString));
     //XXX:
@@ -204,10 +202,10 @@ import java.util.ArrayList;
     //uniqueId.setHi(0xBEEF);
     //uniqueId.setLo(0xF00F);
     queryCtx.setQuery_id(uniqueId);
-    queryCtx.setTables_missing_stats(converter.getDescriptorTable().getTablesMissingStats());
+    queryCtx.setTables_missing_stats(context.getDescriptorTable().getTablesMissingStats());
     queryCtx.setDisable_spilling(false);
     queryCtx.setSnapshot_timestamp(-1);
-    queryCtx.setDesc_tbl_serialized(converter.getDescriptorTable().toSerializedThrift());
+    queryCtx.setDesc_tbl_serialized(context.getDescriptorTable().toSerializedThrift());
     queryCtx.setStart_unix_millis(1573178729578L);
     queryCtx.setDisable_codegen_hint(false);
     queryCtx.setRequest_pool("default-pool");
